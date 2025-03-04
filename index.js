@@ -28,12 +28,14 @@ app.get('/', async (req, res) => {
       headers: { 'User-Agent': 'Clash Verge' }
     });
     const rawData = response.data;
-
+    
     // 3. 尝试 Base64 解码（如果数据经过编码）
     let decodedData;
     try {
       decodedData = Buffer.from(rawData, 'base64').toString('utf-8');
-      if (!decodedData.includes('proxies:') && !decodedData.includes('port:') && !decodedData.includes('mixed-port:')) {
+      if (!decodedData.includes('proxies:') && 
+          !decodedData.includes('port:') && 
+          !decodedData.includes('mixed-port:')) {
         decodedData = rawData;
       }
     } catch (e) {
@@ -64,7 +66,7 @@ app.get('/', async (req, res) => {
           if (parts.length < 5) return null;
           const [type, server, port, cipher, password] = parts;
           return {
-            name: '', // 预留空名字
+            name: '', // 初始为空，后面统一设置
             type: type || 'ss',
             server,
             port: parseInt(port),
@@ -76,31 +78,38 @@ app.get('/', async (req, res) => {
       subConfig = { proxies };
     }
     
-    // 6. 将所有代理的名称都统一设置为 "Default-sub"
+    // 调试：打印解析后的订阅数据
+    console.log("解析后的订阅数据:", JSON.stringify(subConfig, null, 2));
+    
+    // 6. 如果解析出来有代理数组，则强制将每个代理的名称设置为 "Default-sub"
     if (subConfig && subConfig.proxies && Array.isArray(subConfig.proxies)) {
       subConfig.proxies = subConfig.proxies.map(proxy => {
         proxy.name = 'Default-sub';
         return proxy;
       });
-      
-      // 替换模板中的代理数据
-      fixedConfig.proxies = subConfig.proxies;
-      
-      // 同步更新模板中的 proxy-groups 里的代理名称列表
-      if (fixedConfig['proxy-groups']) {
-        fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-          if (group.proxies && Array.isArray(group.proxies)) {
-            return { ...group, proxies: subConfig.proxies.map(p => p.name) };
-          }
-          return group;
-        });
-      }
+    } else {
+      console.log("没有找到有效的代理数据。");
     }
     
-    // 7. 输出最终的 YAML 配置
+    // 调试：打印修改后的代理数据
+    console.log("修改后的代理数据:", JSON.stringify(subConfig.proxies, null, 2));
+    
+    // 7. 将代理数据注入到固定模板中，并更新 proxy-groups 的代理名称列表
+    fixedConfig.proxies = subConfig.proxies || [];
+    if (fixedConfig['proxy-groups']) {
+      fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
+        if (group.proxies && Array.isArray(group.proxies)) {
+          return { ...group, proxies: fixedConfig.proxies.map(p => p.name) };
+        }
+        return group;
+      });
+    }
+    
+    // 8. 输出最终的 YAML 配置
     res.set('Content-Type', 'text/yaml');
     res.send(yaml.dump(fixedConfig));
   } catch (error) {
+    console.error(error);
     res.status(500).send(`转换失败：${error.message}`);
   }
 });
