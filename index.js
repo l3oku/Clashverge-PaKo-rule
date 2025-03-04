@@ -5,7 +5,6 @@ const app = express();
 
 const FIXED_CONFIG_URL = 'https://raw.githubusercontent.com/6otho/Yaml-PaKo/refs/heads/main/PAKO2-ZIYONG.yaml';
 
-// 工具函数：加载远程 YAML 配置并解析为对象
 async function loadYaml(url) {
   const response = await axios.get(url, {
     headers: { 'User-Agent': 'Clash Verge' }
@@ -14,103 +13,83 @@ async function loadYaml(url) {
 }
 
 app.get('/', async (req, res) => {
-  const subUrl = req.query.url; // 获取用户传入的订阅链接
+  const subUrl = req.query.url;
   if (!subUrl) {
     return res.status(400).send('请提供订阅链接，例如 ?url=你的订阅地址');
   }
-  
+
   try {
-    // 1. 加载固定模板配置（你的分流模板）
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
-    
-    // 2. 从订阅链接获取原始数据
     const response = await axios.get(subUrl, {
-      headers: { 'User-Agent': 'Clash Verge' }
+      headers: { 'User-Agent': 'Clash Verge' },
+      timeout: 10000
     });
     const rawData = response.data;
-    
-    // 3. 尝试 Base64 解码（如果数据经过编码）
-    let decodedData;
+
+    // 解码处理优化
+    let decodedData = rawData;
     try {
-      decodedData = Buffer.from(rawData, 'base64').toString('utf-8');
-      if (!decodedData.includes('proxies:') && 
-          !decodedData.includes('port:') && 
-          !decodedData.includes('mixed-port:')) {
-        decodedData = rawData;
+      const bufferData = Buffer.from(rawData, 'base64').toString('utf-8');
+      if (bufferData.match(/^(proxies:|port:|mixed-port:)/m)) {
+        decodedData = bufferData;
       }
-    } catch (e) {
-      decodedData = rawData;
-    }
-    
-    // 4. 根据内容判断：如果包含 proxies 或 port 则认为是标准 YAML 配置
-    let subConfig = null;
-    if (
-      decodedData.includes('proxies:') ||
-      decodedData.includes('port:') ||
-      decodedData.includes('mixed-port:')
-    ) {
-      subConfig = yaml.load(decodedData);
-      if (subConfig && typeof subConfig === 'object' && !Array.isArray(subConfig)) {
-        if (subConfig['mixed-port'] !== undefined) {
-          subConfig.port = subConfig['mixed-port'];
-          delete subConfig['mixed-port'];
-        }
-      }
+    } catch (e) { /* 保持原始数据 */ }
+
+    let subConfig = {};
+    if (decodedData.includes('proxies:')) {
+      subConfig = yaml.load(decodedData) || {};
     } else {
-      // 5. 否则，尝试解析自定义格式（假设每行一个节点，字段以 | 分隔）
-      const proxies = decodedData
+      // 增强自定义格式解析
+      subConfig.proxies = decodedData
         .split('\n')
-        .filter(line => line.trim())
         .map(line => {
-          const parts = line.split('|');
+          const parts = line.trim().split('|');
           if (parts.length < 5) return null;
+          
           const [type, server, port, cipher, password] = parts;
+          const numPort = parseInt(port);
+          
+          if (!server || isNaN(numPort)) return null;
+
           return {
-            name: '', // 初始为空，后面统一设置
+            name: 'Default-sub', // 直接在此处设置默认名称
             type: type || 'ss',
-            server,
-            port: parseInt(port),
-            cipher: cipher || 'aes-256-gcm',
-            password
+            server: server.trim(),
+            port: numPort,
+            cipher: (cipher || 'aes-256-gcm').trim(),
+            password: password.trim()
           };
         })
-        .filter(item => item !== null);
-      subConfig = { proxies };
+        .filter(Boolean);
     }
-    
-    // 调试：打印解析后的订阅数据
-    console.log("解析后的订阅数据:", JSON.stringify(subConfig, null, 2));
-    
-    // 6. 如果解析出来有代理数组，则强制将每个代理的名称设置为 "Default-sub"
-    if (subConfig && subConfig.proxies && Array.isArray(subConfig.proxies)) {
-      subConfig.proxies = subConfig.proxies.map(proxy => {
-        proxy.name = 'Default-sub';
-        return proxy;
-      });
-    } else {
-      console.log("没有找到有效的代理数据。");
+
+    // 强制覆盖所有代理名称
+    if (subConfig.proxies?.length) {
+      subConfig.proxies = subConfig.proxies.map(p => ({
+        ...p,
+        name: 'Default-sub' // 确保名称强制覆盖
+      }));
+
+      fixedConfig.proxies = subConfig.proxies;
+
+      // 更新代理组
+      if (fixedConfig['proxy-groups']) {
+        fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => ({
+          ...group,
+          proxies: group.proxies?.includes('Default-sub') 
+            ? ['Default-sub']  // 如果原组包含任意代理，则替换为单个默认名称
+            : group.proxies    // 否则保持原样
+        }));
+      }
     }
-    
-    // 调试：打印修改后的代理数据
-    console.log("修改后的代理数据:", JSON.stringify(subConfig.proxies, null, 2));
-    
-    // 7. 将代理数据注入到固定模板中，并更新 proxy-groups 的代理名称列表
-    fixedConfig.proxies = subConfig.proxies || [];
-    if (fixedConfig['proxy-groups']) {
-      fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-        if (group.proxies && Array.isArray(group.proxies)) {
-          return { ...group, proxies: fixedConfig.proxies.map(p => p.name) };
-        }
-        return group;
-      });
-    }
-    
-    // 8. 输出最终的 YAML 配置
-    res.set('Content-Type', 'text/yaml');
-    res.send(yaml.dump(fixedConfig));
+
+    res
+      .set('Content-Type', 'text/yaml')
+      .send(yaml.dump(fixedConfig));
+
   } catch (error) {
-    console.error(error);
-    res.status(500).send(`转换失败：${error.message}`);
+    console.error(`处理失败: ${error.message}`);
+    res.status(500).send(`配置转换失败: ${error.message}`);
   }
 });
 
