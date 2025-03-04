@@ -94,7 +94,7 @@ app.get('/', async (req, res) => {
       }
     }
     
-    // 7. 输出最终的 YAML 配置，格式即为你固定的 PAKO2-ZIYONG.yaml 模板
+    // 7. 输出最终的 YAML 配置，格式即为你固定的 PAKO.yaml 模板
     res.set('Content-Type', 'text/yaml');
     res.send(yaml.dump(fixedConfig));
   } catch (error) {
