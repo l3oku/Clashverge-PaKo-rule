@@ -40,7 +40,7 @@ app.get('/', async (req, res) => {
       decodedData = rawData;
     }
     
-    // 4. 根据内容判断：如果包含 proxies 或 port 则认为是标准 YAML 配置
+    // 4. 判断数据格式：如果包含 proxies 或 port 则认为是标准 YAML 配置
     let subConfig = null;
     if (
       decodedData.includes('proxies:') ||
@@ -64,7 +64,7 @@ app.get('/', async (req, res) => {
           if (parts.length < 5) return null;
           const [type, server, port, cipher, password] = parts;
           return {
-            name: `${server}-${port}`, // 自动生成名称
+            name: `${server}-${port}`, // 先用 server-port 生成一个名称
             type: type || 'ss',
             server,
             port: parseInt(port),
@@ -76,12 +76,26 @@ app.get('/', async (req, res) => {
       subConfig = { proxies };
     }
     
-    // 6. 检查代理数据中是否有名称，如果没有则自动生成
+    // 6. 从订阅链接中提取域名，作为默认的代理名称
+    let domain = '';
+    try {
+      const urlObj = new URL(subUrl);
+      domain = urlObj.hostname;
+      // 如果有子域名，则取最后两段作为主域名（例如：login.djjc.cfd -> djjc.cfd）
+      const parts = domain.split('.');
+      if (parts.length > 2) {
+        domain = parts.slice(-2).join('.');
+      }
+    } catch (err) {
+      // 如果解析出错则为空，后续判断时可忽略
+      domain = '';
+    }
+    
+    // 7. 检查代理数据中是否有名称，如果没有则使用提取的域名
     if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
       subConfig.proxies = subConfig.proxies.map(proxy => {
-        if (!proxy.name) {
-          // 如果有 remark 字段则用 remark，否则使用 server 和 port 拼接
-          proxy.name = proxy.remark || `${proxy.server}-${proxy.port}`;
+        if (!proxy.name || proxy.name.trim() === '') {
+          proxy.name = domain || `${proxy.server}-${proxy.port}`;
         }
         return proxy;
       });
@@ -100,7 +114,7 @@ app.get('/', async (req, res) => {
       }
     }
     
-    // 7. 输出最终的 YAML 配置，格式基于你的模板，同时包含最新代理数据
+    // 8. 输出最终的 YAML 配置，格式基于你的模板，同时包含最新代理数据
     res.set('Content-Type', 'text/yaml');
     res.send(yaml.dump(fixedConfig));
   } catch (error) {
