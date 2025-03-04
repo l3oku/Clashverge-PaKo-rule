@@ -20,7 +20,7 @@ app.get('/', async (req, res) => {
   }
   
   try {
-    // 1. 加载固定模板配置
+    // 1. 加载固定模板配置（你的 YAML 分流配置）
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
     
     // 2. 从订阅链接获取原始数据
@@ -29,7 +29,7 @@ app.get('/', async (req, res) => {
     });
     const rawData = response.data;
 
-    // 3. 尝试 Base64 解码（如果数据经过编码）
+    // 3. 尝试 Base64 解码，如果解码后的数据不包含关键字，则直接使用原始数据
     let decodedData;
     try {
       decodedData = Buffer.from(rawData, 'base64').toString('utf-8');
@@ -40,7 +40,7 @@ app.get('/', async (req, res) => {
       decodedData = rawData;
     }
     
-    // 4. 判断数据格式：如果包含 proxies 或 port 则认为是标准 YAML 配置
+    // 4. 根据内容判断：如果包含 proxies 或 port 则认为是标准 YAML 配置
     let subConfig = null;
     if (
       decodedData.includes('proxies:') ||
@@ -55,7 +55,7 @@ app.get('/', async (req, res) => {
         }
       }
     } else {
-      // 5. 否则，按自定义格式解析（每行一个节点，字段以 | 分隔）
+      // 5. 否则，尝试解析自定义格式（假设每行一个节点，字段以 | 分隔）
       const proxies = decodedData
         .split('\n')
         .filter(line => line.trim())
@@ -64,7 +64,7 @@ app.get('/', async (req, res) => {
           if (parts.length < 5) return null;
           const [type, server, port, cipher, password] = parts;
           return {
-            name: `${server}-${port}`, // 先用 server-port 生成一个名称
+            name: '', // 空名字，后面会填充
             type: type || 'ss',
             server,
             port: parseInt(port),
@@ -76,34 +76,35 @@ app.get('/', async (req, res) => {
       subConfig = { proxies };
     }
     
-    // 6. 从订阅链接中提取域名，作为默认的代理名称
-    let domain = '';
+    // 6. 从订阅链接中提取域名（例如：https://login.djjc.cfd/api/v1/client/subscribe?...  提取结果为 djjc.cfd）
+    let domainName = '';
     try {
       const urlObj = new URL(subUrl);
-      domain = urlObj.hostname;
-      // 如果有子域名，则取最后两段作为主域名（例如：login.djjc.cfd -> djjc.cfd）
-      const parts = domain.split('.');
-      if (parts.length > 2) {
-        domain = parts.slice(-2).join('.');
+      const hostname = urlObj.hostname;
+      const parts = hostname.split('.');
+      // 简单处理：取后两个部分组成主域名
+      if (parts.length >= 2) {
+        domainName = parts.slice(-2).join('.');
+      } else {
+        domainName = hostname;
       }
-    } catch (err) {
-      // 如果解析出错则为空，后续判断时可忽略
-      domain = '';
+    } catch (e) {
+      domainName = 'default';
     }
     
-    // 7. 检查代理数据中是否有名称，如果没有则使用提取的域名
+    // 7. 检查每个代理，如果 name 为空，则自动填入从订阅链接提取的域名
     if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
       subConfig.proxies = subConfig.proxies.map(proxy => {
         if (!proxy.name || proxy.name.trim() === '') {
-          proxy.name = domain || `${proxy.server}-${proxy.port}`;
+          proxy.name = domainName;
         }
         return proxy;
       });
       
-      // 将订阅数据中的代理列表嫁接到固定模板中
+      // 将订阅的代理列表嫁接到固定模板中
       fixedConfig.proxies = subConfig.proxies;
       
-      // 同步更新模板中的代理分组名称列表
+      // 同步更新模板中的 proxy-groups 中的代理名称列表
       if (fixedConfig['proxy-groups']) {
         fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
           if (group.proxies && Array.isArray(group.proxies)) {
@@ -114,7 +115,7 @@ app.get('/', async (req, res) => {
       }
     }
     
-    // 8. 输出最终的 YAML 配置，格式基于你的模板，同时包含最新代理数据
+    // 8. 输出最终的 YAML 配置，既保留了固定模板分流规则，也包含了自动添加名称的代理数据
     res.set('Content-Type', 'text/yaml');
     res.send(yaml.dump(fixedConfig));
   } catch (error) {
