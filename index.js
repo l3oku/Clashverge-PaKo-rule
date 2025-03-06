@@ -77,20 +77,26 @@ app.get('/', async (req, res) => {
       subConfig = { proxies };
     }
     
-    // 6. 将订阅数据中的代理列表嫁接到固定模板中
-    // 这里假设你的固定配置中有 proxies 字段以及对应的 proxy-groups，
-    // 我们用订阅数据的 proxies 替换模板中的代理，并更新 proxy-groups 中的代理名称列表
-    if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
-  fixedConfig.proxies = subConfig.proxies; // 替换原有代理列表
+// 修改后的部分（步骤6）
+if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
+  // 完全替换模板中的proxies
+  fixedConfig.proxies = subConfig.proxies;
 
+  // 去重处理：确保代理名称唯一（保留最后一个出现的项）
+  const seen = new Map();
+  fixedConfig.proxies = fixedConfig.proxies.reverse().filter(proxy => {
+    if (!seen.has(proxy.name)) {
+      seen.set(proxy.name, true);
+      return true;
+    }
+    return false;
+  }).reverse(); // 恢复原始顺序
+
+  // 更新PROXY组的代理名称
   if (fixedConfig['proxy-groups']) {
     fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-      if (group.proxies && Array.isArray(group.proxies)) {
-        // **只更新 PROXY 组的代理，不影响 AUTO 相关分流**
-        if (group.name === 'PROXY') {
-          return { ...group, proxies: subConfig.proxies.map(p => p.name) };
-        }
-        return group; // 其他分组保持不变（比如 HK AUTO、SG AUTO）
+      if (group.name === 'PROXY' && Array.isArray(group.proxies)) {
+        return { ...group, proxies: fixedConfig.proxies.map(p => p.name) };
       }
       return group;
     });
