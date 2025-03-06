@@ -41,7 +41,7 @@ app.get('/', async (req, res) => {
       decodedData = rawData;
     }
     
-    // 4. 解析订阅数据（支持标准 YAML 或自定义格式）
+    // 4. 解析订阅数据
     let subConfig = null;
     if (
       decodedData.includes('proxies:') ||
@@ -56,7 +56,7 @@ app.get('/', async (req, res) => {
         }
       }
     } else {
-      // 如果不是标准 YAML 格式，则尝试解析为自定义格式（每行一个节点，字段用 | 分隔）
+      // 解析为自定义格式
       const proxies = decodedData
         .split('\n')
         .filter(line => line.trim())
@@ -77,19 +77,22 @@ app.get('/', async (req, res) => {
       subConfig = { proxies };
     }
     
-    // 5. 使用订阅数据更新配置
-    if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
-      // 将订阅的 proxies 去掉第一个（默认的那一项），直接把后面的往前调
-      const newProxies = subConfig.proxies.slice(1);
-      fixedConfig.proxies = newProxies;
+    // 5. 处理 `proxies`
+    if (subConfig && subConfig.proxies && subConfig.proxies.length > 1) {
+      // **去掉第一个代理**
+      const filteredProxies = subConfig.proxies.slice(1);
       
+      // **用第二个代理替换最终的 `proxies`**
+      fixedConfig.proxies = [filteredProxies[0]];
+
+      // **更新 `proxy-groups`**
       if (fixedConfig['proxy-groups']) {
         fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
           if (group.proxies && Array.isArray(group.proxies)) {
-            // 只更新名称为 "PROXY" 的分流组
             if (group.name === 'PROXY') {
-              return { ...group, proxies: newProxies.map(p => p.name) };
+              return { ...group, proxies: filteredProxies.map(p => p.name) };
             }
+            return group;
           }
           return group;
         });
