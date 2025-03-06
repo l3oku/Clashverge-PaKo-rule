@@ -78,28 +78,22 @@ app.get('/', async (req, res) => {
     }
     
     // 6. 将订阅数据中的代理列表嫁接到固定模板中
-    // 替换模板中的 proxies，并更新 proxy-groups 中“PROXY”组的代理名称列表
+    // 为避免默认的机场代理（通常为数组第一项）重复，我们过滤掉第一个代理
     if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
-      fixedConfig.proxies = subConfig.proxies;
+      const filteredProxies = subConfig.proxies.slice(1);
+      fixedConfig.proxies = filteredProxies; // 用过滤后的代理列表替换模板中的 proxies
 
       if (fixedConfig['proxy-groups']) {
         fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
           if (group.proxies && Array.isArray(group.proxies)) {
-            // **只更新 PROXY 组的代理，不影响其他分流**
+            // 只更新名称为 "PROXY" 的分流组
             if (group.name === 'PROXY') {
-              return { ...group, proxies: subConfig.proxies.map(p => p.name) };
+              return { ...group, proxies: filteredProxies.map(p => p.name) };
             }
-            return group;
+            return group; // 其他分组保持不变
           }
           return group;
         });
-      }
-    }
-    
-    // 新增修改：如果请求中带有 hideProxies 参数且为 true，则仅保留代理名称，移除敏感信息
-    if (req.query.hideProxies === 'true') {
-      if (fixedConfig.proxies && Array.isArray(fixedConfig.proxies)) {
-        fixedConfig.proxies = fixedConfig.proxies.map(proxy => ({ name: proxy.name }));
       }
     }
     
