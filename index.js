@@ -20,7 +20,7 @@ app.get('/', async (req, res) => {
   }
   
   try {
-    // 1. 加载固定 YAML 配置作为模板
+    // 1. 加载你的固定 YAML 配置作为模板
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
     
     // 2. 从订阅链接获取原始数据
@@ -78,26 +78,26 @@ app.get('/', async (req, res) => {
     }
     
     // 6. 将订阅数据中的代理列表嫁接到固定模板中
-    // 为避免默认的机场代理（通常为数组第一项）重复，我们过滤掉第一个代理
+    // 这里假设你的固定配置中有 proxies 字段以及对应的 proxy-groups，
+    // 我们用订阅数据的 proxies 替换模板中的代理，并更新 proxy-groups 中的代理名称列表
     if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
-      const filteredProxies = subConfig.proxies.slice(1);
-      fixedConfig.proxies = filteredProxies; // 用过滤后的代理列表替换模板中的 proxies
+  fixedConfig.proxies = subConfig.proxies; // 替换原有代理列表
 
-      if (fixedConfig['proxy-groups']) {
-        fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-          if (group.proxies && Array.isArray(group.proxies)) {
-            // 只更新名称为 "PROXY" 的分流组
-            if (group.name === 'PROXY') {
-              return { ...group, proxies: filteredProxies.map(p => p.name) };
-            }
-            return group; // 其他分组保持不变
-          }
-          return group;
-        });
+  if (fixedConfig['proxy-groups']) {
+    fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
+      if (group.proxies && Array.isArray(group.proxies)) {
+        // **只更新 PROXY 组的代理，不影响 AUTO 相关分流**
+        if (group.name === 'PROXY') {
+          return { ...group, proxies: subConfig.proxies.map(p => p.name) };
+        }
+        return group; // 其他分组保持不变（比如 HK AUTO、SG AUTO）
       }
-    }
+      return group;
+    });
+  }
+}
     
-    // 7. 输出最终的 YAML 配置，格式即为固定的 PAKO.yaml 模板
+    // 7. 输出最终的 YAML 配置，格式即为你固定的 PAKO.yaml 模板
     res.set('Content-Type', 'text/yaml');
     res.send(yaml.dump(fixedConfig));
   } catch (error) {
