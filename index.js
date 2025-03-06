@@ -18,6 +18,11 @@ app.get('/', async (req, res) => {
     // 加载模板配置
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
     
+    // 确保proxies字段存在且为数组
+    if (!Array.isArray(fixedConfig.proxies)) {
+      fixedConfig.proxies = [];
+    }
+
     // 获取订阅数据
     const response = await axios.get(subUrl, { headers: { 'User-Agent': 'Clash Verge' } });
     let decodedData = response.data;
@@ -56,39 +61,38 @@ app.get('/', async (req, res) => {
 
     // 核心修改部分开始
     if (subConfig?.proxies?.length > 0) {
-      // 1. 仅修改第一个代理的连接信息
-      if (fixedConfig.proxies?.length > 0) {
+      // 1. 仅修改第一个代理的连接信息（确保模板有至少1个代理）
+      if (fixedConfig.proxies.length > 0) {
         const templateProxy = fixedConfig.proxies[0];
         const subProxy = subConfig.proxies[0];
         
-        // 保留模板代理名称，仅更新连接字段
         fixedConfig.proxies[0] = { 
           ...templateProxy,
           server: subProxy.server,
           port: subProxy.port || templateProxy.port,
           password: subProxy.password || templateProxy.password,
-          // 以下字段按需添加
           cipher: subProxy.cipher || templateProxy.cipher,
           type: subProxy.type || templateProxy.type
         };
       }
 
-      // 2. 去重处理（根据name字段）
-      const seen = new Set();
-      fixedConfig.proxies = fixedConfig.proxies.filter(proxy => {
-        return !seen.has(proxy.name) && seen.add(proxy.name);
-      });
+      // 2. 去重处理（防御性编程）
+      if (Array.isArray(fixedConfig.proxies)) {
+        const seen = new Set();
+        fixedConfig.proxies = fixedConfig.proxies.filter(proxy => {
+          return proxy?.name && !seen.has(proxy.name) && seen.add(proxy.name);
+        });
+      }
 
-      // 3. 更新PROXY组
-      if (fixedConfig['proxy-groups']) {
+      // 3. 更新PROXY组（严格验证数组）
+      if (fixedConfig['proxy-groups'] && Array.isArray(fixedConfig['proxy-groups'])) {
         fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-          if (group.name === 'PROXY') {
-            // 保留原有名称顺序，实际连接已更新
+          if (group.name === 'PROXY' && Array.isArray(group.proxies)) {
             return {
               ...group,
               proxies: group.proxies.map((name, index) => 
-                index === 0 ? fixedConfig.proxies[0]?.name : name
-              ).filter(Boolean)
+                index === 0 && fixedConfig.proxies[0]?.name ? fixedConfig.proxies[0].name : name
+              ).filter(name => !!name) // 过滤空值
             };
           }
           return group;
