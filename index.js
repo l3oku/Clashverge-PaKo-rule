@@ -77,39 +77,39 @@ app.get('/', async (req, res) => {
       subConfig = { proxies };
     }
     
-// 修改后的步骤6逻辑
+// 修改步骤6的代码如下
 if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
-  // 1. 确保 fixedConfig.proxies 存在且为数组
-  if (!Array.isArray(fixedConfig.proxies)) {
-    fixedConfig.proxies = []; // 初始化空数组
+  // 1. 保留模板所有默认代理
+  const templateProxies = [...fixedConfig.proxies]; // 完整复制模板代理
+
+  // 2. 仅替换第一个代理的服务器信息（保留名称和流量提示）
+  if (templateProxies.length > 0 && subConfig.proxies[0]) {
+    const firstProxyFromSub = subConfig.proxies[0];
+    templateProxies[0] = {
+      ...templateProxies[0],    // 保留模板字段（名称、端口等）
+      server: firstProxyFromSub.server,  // 替换服务器地址
+      port: firstProxyFromSub.port || templateProxies[0].port,
+      password: firstProxyFromSub.password || templateProxies[0].password
+      // 其他字段按需覆盖...
+    };
   }
 
-  // 2. 分离静态流量提示和模板代理
-  const staticProxies = fixedConfig.proxies.slice(0, 3); // 前3项为流量提示
-  const templateProxies = fixedConfig.proxies.slice(3) || []; // 后续代理（避免undefined）
-
-  // 3. 合并模板代理与订阅代理（去重）
-  const mergedProxies = [...templateProxies, ...subConfig.proxies];
-  const seen = new Map();
-  const uniqueProxies = mergedProxies.filter(proxy => {
-    const key = `${proxy.name}|${proxy.server}|${proxy.port}`;
-    if (!seen.has(key)) {
-      seen.set(key, true);
+  // 3. 去重处理（根据name唯一性）
+  const seen = new Set();
+  fixedConfig.proxies = templateProxies.filter(proxy => {
+    if (!seen.has(proxy.name)) {
+      seen.add(proxy.name);
       return true;
     }
     return false;
   });
 
-  // 4. 组合最终代理列表：静态提示 + 去重后的代理
-  fixedConfig.proxies = [...staticProxies, ...uniqueProxies];
-
-  // 5. 更新PROXY组（保留流量提示）
+  // 4. 更新PROXY组（仅修改第一个代理名称对应的服务器）
   if (fixedConfig['proxy-groups']) {
     fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-      if (group.name === 'PROXY') {
-        const staticItems = group.proxies.slice(0, 3); // 保留前3个静态项
-        const dynamicProxies = uniqueProxies.map(p => p.name);
-        return { ...group, proxies: [...staticItems, ...dynamicProxies] };
+      if (group.name === 'PROXY' && Array.isArray(group.proxies)) {
+        // 保持原有代理名称顺序，仅实际连接信息变化
+        return { ...group, proxies: group.proxies };
       }
       return group;
     });
