@@ -77,32 +77,26 @@ app.get('/', async (req, res) => {
       subConfig = { proxies };
     }
     
-    // 5. 如果订阅数据中有 proxies，则只用来更新固定配置中的分流组
+    // 5. 使用订阅数据更新配置
     if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
-      // 如果固定配置中没有 proxies 字段，则才用订阅数据覆盖
-      if (!fixedConfig.proxies) {
-        fixedConfig.proxies = subConfig.proxies;
-      }
+      // 将订阅的 proxies 去掉第一个（默认的那一项），直接把后面的往前调
+      const newProxies = subConfig.proxies.slice(1);
+      fixedConfig.proxies = newProxies;
       
-      // 更新 proxy-groups 中 "PROXY" 组的代理名称列表
       if (fixedConfig['proxy-groups']) {
         fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
           if (group.proxies && Array.isArray(group.proxies)) {
+            // 只更新名称为 "PROXY" 的分流组
             if (group.name === 'PROXY') {
-              // 若固定配置已有 proxies，则用其中的名称；否则用订阅数据的名称
-              const proxyNames = fixedConfig.proxies 
-                ? fixedConfig.proxies.map(p => p.name) 
-                : subConfig.proxies.map(p => p.name);
-              return { ...group, proxies: proxyNames };
+              return { ...group, proxies: newProxies.map(p => p.name) };
             }
-            return group;
           }
           return group;
         });
       }
     }
     
-    // 6. 输出最终的 YAML 配置（保持固定配置的输出，不重复追加订阅的 proxies）
+    // 6. 输出最终的 YAML 配置
     res.set('Content-Type', 'text/yaml');
     res.send(yaml.dump(fixedConfig));
   } catch (error) {
