@@ -20,7 +20,7 @@ app.get('/', async (req, res) => {
   }
   
   try {
-    // 1. 加载你的固定 YAML 配置作为模板
+    // 1. 加载固定 YAML 配置作为模板
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
     
     // 2. 从订阅链接获取原始数据
@@ -41,7 +41,7 @@ app.get('/', async (req, res) => {
       decodedData = rawData;
     }
     
-    // 4. 根据数据内容判断：如果包含 proxies 或 port，则认为是标准 YAML 配置
+    // 4. 解析订阅数据（支持标准 YAML 或自定义格式）
     let subConfig = null;
     if (
       decodedData.includes('proxies:') ||
@@ -56,7 +56,7 @@ app.get('/', async (req, res) => {
         }
       }
     } else {
-      // 5. 如果不符合 YAML 格式，则尝试解析为自定义格式（假设每行一个节点，字段用 | 分隔）
+      // 如果不是标准 YAML 格式，则尝试解析为自定义格式（每行一个节点，字段用 | 分隔）
       const proxies = decodedData
         .split('\n')
         .filter(line => line.trim())
@@ -77,27 +77,32 @@ app.get('/', async (req, res) => {
       subConfig = { proxies };
     }
     
-    // 6. 将订阅数据中的代理列表嫁接到固定模板中
-    // 这里假设你的固定配置中有 proxies 字段以及对应的 proxy-groups，
-    // 我们用订阅数据的 proxies 替换模板中的代理，并更新 proxy-groups 中的代理名称列表
+    // 5. 如果订阅数据中有 proxies，则只用来更新固定配置中的分流组
     if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
-  fixedConfig.proxies = subConfig.proxies; // 替换原有代理列表
-
-  if (fixedConfig['proxy-groups']) {
-    fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-      if (group.proxies && Array.isArray(group.proxies)) {
-        // **只更新 PROXY 组的代理，不影响 AUTO 相关分流**
-        if (group.name === 'PROXY') {
-          return { ...group, proxies: subConfig.proxies.map(p => p.name) };
-        }
-        return group; // 其他分组保持不变（比如 HK AUTO、SG AUTO）
+      // 如果固定配置中没有 proxies 字段，则才用订阅数据覆盖
+      if (!fixedConfig.proxies) {
+        fixedConfig.proxies = subConfig.proxies;
       }
-      return group;
-    });
-  }
-}
+      
+      // 更新 proxy-groups 中 "PROXY" 组的代理名称列表
+      if (fixedConfig['proxy-groups']) {
+        fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
+          if (group.proxies && Array.isArray(group.proxies)) {
+            if (group.name === 'PROXY') {
+              // 若固定配置已有 proxies，则用其中的名称；否则用订阅数据的名称
+              const proxyNames = fixedConfig.proxies 
+                ? fixedConfig.proxies.map(p => p.name) 
+                : subConfig.proxies.map(p => p.name);
+              return { ...group, proxies: proxyNames };
+            }
+            return group;
+          }
+          return group;
+        });
+      }
+    }
     
-    // 7. 输出最终的 YAML 配置，格式即为你固定的 PAKO.yaml 模板
+    // 6. 输出最终的 YAML 配置（保持固定配置的输出，不重复追加订阅的 proxies）
     res.set('Content-Type', 'text/yaml');
     res.send(yaml.dump(fixedConfig));
   } catch (error) {
