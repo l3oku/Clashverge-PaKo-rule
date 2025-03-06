@@ -77,31 +77,37 @@ app.get('/', async (req, res) => {
       subConfig = { proxies };
     }
     
-// 修改步骤6的代码逻辑如下
+// 修改后的步骤6逻辑
 if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
-  // 1. 分离模板中的静态流量提示和实际代理
-  const staticProxies = fixedConfig.proxies.slice(0, 3); // 前3项是流量提示
-  const templateProxies = fixedConfig.proxies.slice(3);  // 后续是模板默认代理
+  // 1. 确保 fixedConfig.proxies 存在且为数组
+  if (!Array.isArray(fixedConfig.proxies)) {
+    fixedConfig.proxies = []; // 初始化空数组
+  }
 
-  // 2. 合并订阅代理和模板默认代理（去重）
+  // 2. 分离静态流量提示和模板代理
+  const staticProxies = fixedConfig.proxies.slice(0, 3); // 前3项为流量提示
+  const templateProxies = fixedConfig.proxies.slice(3) || []; // 后续代理（避免undefined）
+
+  // 3. 合并模板代理与订阅代理（去重）
   const mergedProxies = [...templateProxies, ...subConfig.proxies];
-  const uniqueProxies = mergedProxies.filter((proxy, index, self) =>
-    index === self.findIndex(p => 
-      p.name === proxy.name && 
-      p.server === proxy.server && 
-      p.port === proxy.port
-    )
-  );
+  const seen = new Map();
+  const uniqueProxies = mergedProxies.filter(proxy => {
+    const key = `${proxy.name}|${proxy.server}|${proxy.port}`;
+    if (!seen.has(key)) {
+      seen.set(key, true);
+      return true;
+    }
+    return false;
+  });
 
-  // 3. 组合最终代理列表：静态提示 + 去重后的代理
+  // 4. 组合最终代理列表：静态提示 + 去重后的代理
   fixedConfig.proxies = [...staticProxies, ...uniqueProxies];
 
-  // 4. 更新PROXY组的代理列表（保留静态提示）
+  // 5. 更新PROXY组（保留流量提示）
   if (fixedConfig['proxy-groups']) {
     fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
       if (group.name === 'PROXY') {
-        // 保留前3个静态项，后续用代理名称填充
-        const staticItems = group.proxies.slice(0, 3);
+        const staticItems = group.proxies.slice(0, 3); // 保留前3个静态项
         const dynamicProxies = uniqueProxies.map(p => p.name);
         return { ...group, proxies: [...staticItems, ...dynamicProxies] };
       }
