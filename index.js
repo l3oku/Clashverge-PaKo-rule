@@ -81,18 +81,21 @@ app.get('/', async (req, res) => {
     // 这里假设你的固定配置中有 proxies 字段以及对应的 proxy-groups，
     // 我们用订阅数据的 proxies 替换模板中的代理，并更新 proxy-groups 中的代理名称列表
     if (subConfig && subConfig.proxies && subConfig.proxies.length > 0) {
-      fixedConfig.proxies = subConfig.proxies;
-      
-      if (fixedConfig['proxy-groups']) {
-        fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-          if (group.proxies && Array.isArray(group.proxies)) {
-            // 如果该分组原本就是动态选择的，更新为订阅代理的名称列表
-            return { ...group, proxies: subConfig.proxies.map(p => p.name) };
-          }
-          return group;
-        });
+  fixedConfig.proxies = subConfig.proxies; // 替换原有代理列表
+
+  if (fixedConfig['proxy-groups']) {
+    fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
+      if (group.proxies && Array.isArray(group.proxies)) {
+        // **只更新 PROXY 组的代理，不影响 AUTO 相关分流**
+        if (group.name === 'PROXY') {
+          return { ...group, proxies: subConfig.proxies.map(p => p.name) };
+        }
+        return group; // 其他分组保持不变（比如 HK AUTO、SG AUTO）
       }
-    }
+      return group;
+    });
+  }
+}
     
     // 7. 输出最终的 YAML 配置，格式即为你固定的 PAKO.yaml 模板
     res.set('Content-Type', 'text/yaml');
