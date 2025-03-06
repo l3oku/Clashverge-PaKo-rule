@@ -33,7 +33,7 @@ app.get('/', async (req, res) => {
       if (tempDecoded.includes('proxies:') || tempDecoded.includes('port:')) {
         decodedData = tempDecoded;
       }
-    } catch (e) { /* 忽略解码错误 */ }
+    } catch (e) {}
 
     // 解析订阅数据
     let subConfig;
@@ -59,47 +59,54 @@ app.get('/', async (req, res) => {
       };
     }
 
-    // 核心修改部分开始
+    // 核心逻辑：混合模板与订阅代理
     if (subConfig?.proxies?.length > 0) {
-      // 1. 仅修改第一个代理的连接信息（确保模板有至少1个代理）
-      if (fixedConfig.proxies.length > 0) {
-        const templateProxy = fixedConfig.proxies[0];
+      // 1. 保留模板所有代理
+      const templateProxies = [...fixedConfig.proxies];
+
+      // 2. 替换第一个代理的服务器信息（保留名称）
+      if (templateProxies.length > 0) {
         const subProxy = subConfig.proxies[0];
-        
-        fixedConfig.proxies[0] = { 
-          ...templateProxy,
+        templateProxies[0] = {
+          ...templateProxies[0],  // 保留名称和默认配置
           server: subProxy.server,
-          port: subProxy.port || templateProxy.port,
-          password: subProxy.password || templateProxy.password,
-          cipher: subProxy.cipher || templateProxy.cipher,
-          type: subProxy.type || templateProxy.type
+          port: subProxy.port || templateProxies[0].port,
+          password: subProxy.password || templateProxies[0].password,
+          cipher: subProxy.cipher || templateProxies[0].cipher,
+          type: subProxy.type || templateProxies[0].type
         };
       }
 
-      // 2. 去重处理（防御性编程）
-      if (Array.isArray(fixedConfig.proxies)) {
-        const seen = new Set();
-        fixedConfig.proxies = fixedConfig.proxies.filter(proxy => {
-          return proxy?.name && !seen.has(proxy.name) && seen.add(proxy.name);
-        });
-      }
+      // 3. 合并代理列表（模板代理 + 订阅代理）
+      const mergedProxies = [...templateProxies, ...subConfig.proxies];
 
-      // 3. 更新PROXY组（严格验证数组）
-      if (fixedConfig['proxy-groups'] && Array.isArray(fixedConfig['proxy-groups'])) {
+      // 4. 根据名称去重（保留第一个出现的代理）
+      const seen = new Map();
+      fixedConfig.proxies = mergedProxies.filter(proxy => {
+        if (!proxy?.name) return false;
+        if (!seen.has(proxy.name)) {
+          seen.set(proxy.name, true);
+          return true;
+        }
+        return false;
+      });
+
+      // 5. 更新PROXY组
+      if (Array.isArray(fixedConfig['proxy-groups'])) {
         fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
           if (group.name === 'PROXY' && Array.isArray(group.proxies)) {
+            // 保留原有名称顺序，实际连接已更新
             return {
               ...group,
-              proxies: group.proxies.map((name, index) => 
-                index === 0 && fixedConfig.proxies[0]?.name ? fixedConfig.proxies[0].name : name
-              ).filter(name => !!name) // 过滤空值
+              proxies: group.proxies.filter(name => 
+                fixedConfig.proxies.some(p => p.name === name)
+              )
             };
           }
           return group;
         });
       }
     }
-    // 核心修改部分结束
 
     res.set('Content-Type', 'text/yaml');
     res.send(yaml.dump(fixedConfig));
