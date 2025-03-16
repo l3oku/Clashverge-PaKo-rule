@@ -3,6 +3,7 @@ const axios = require('axios');
 const yaml = require('js-yaml');
 const app = express();
 
+// 固定配置文件 URL（包含完整的分流规则、代理组、规则提供者等）
 const FIXED_CONFIG_URL = 'https://raw.githubusercontent.com/6otho/Yaml-PaKo/refs/heads/main/PAKO.yaml';
 
 async function loadYaml(url) {
@@ -13,32 +14,34 @@ async function loadYaml(url) {
 app.get('/', async (req, res) => {
   const subUrl = req.query.url;
   if (!subUrl) return res.status(400).send('请提供订阅链接，例如 ?url=你的订阅地址');
-
+  
   try {
-    // 加载固定模板配置（其中 proxies 中包含了流量等信息）
+    // 1. 加载固定模板配置（其中包含完整的分流规则、代理组、规则提供者等）
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
     if (!Array.isArray(fixedConfig.proxies)) {
       fixedConfig.proxies = [];
     }
 
-    // 获取订阅数据
+    // 2. 获取订阅数据
     const response = await axios.get(subUrl, { headers: { 'User-Agent': 'Clash Verge' } });
     let decodedData = response.data;
-
-    // Base64 解码处理
+    
+    // Base64 解码处理（如果返回数据经过 Base64 编码，则解码）
     try {
       const tempDecoded = Buffer.from(decodedData, 'base64').toString('utf-8');
       if (tempDecoded.includes('proxies:') || tempDecoded.includes('port:')) {
         decodedData = tempDecoded;
       }
-    } catch (e) {}
-
-    // 解析订阅数据
+    } catch (e) {
+      // 忽略解码失败
+    }
+    
+    // 3. 解析订阅数据（支持 YAML 格式或自定义格式）
     let subConfig;
     if (decodedData.includes('proxies:')) {
       subConfig = yaml.load(decodedData);
     } else {
-      // 自定义格式解析（这里生成的名称为默认格式，不含流量信息，仅用于更新连接参数）
+      // 自定义格式解析：生成的节点名称仅作为默认，不包含流量等描述
       subConfig = {
         proxies: decodedData.split('\n')
           .filter(line => line.trim())
@@ -57,8 +60,9 @@ app.get('/', async (req, res) => {
           .filter(Boolean)
       };
     }
-
-    // 合并逻辑：用订阅代理中的连接参数更新固定模板的 proxies（保留模板中预设的名称）
+    
+    // 4. 合并逻辑：仅更新固定配置中 proxies 数组的连接参数（server、port、password、cipher、type、udp）
+    //    保留固定配置中原有的代理名称（这些名称包含了流量、重置、到期等信息）
     const templateProxies = fixedConfig.proxies;
     const subs = subConfig.proxies || [];
     let mergedProxies = templateProxies.map((tplProxy, index) => {
@@ -76,7 +80,7 @@ app.get('/', async (req, res) => {
       }
       return tplProxy;
     });
-    // 如果订阅节点比模板多，则追加额外的不重复节点
+    // 如果订阅代理数量超过模板数量，则追加额外的节点（前提是不重复名称）
     if (subs.length > templateProxies.length) {
       const extraSubs = subs.slice(templateProxies.length);
       extraSubs.forEach(subProxy => {
@@ -85,51 +89,11 @@ app.get('/', async (req, res) => {
         }
       });
     }
-
-    // 构造最终输出对象，严格按照你提供的格式：
-    const finalConfig = {
-      dns: {
-        enable: true,
-        listen: "0.0.0.0:1053",
-        ipv6: true,
-        "enhanced-mode": "fake-ip",
-        "fake-ip-range": "28.0.0.1/8",
-        "fake-ip-filter": ["*", "+.lan"],
-        "default-nameserver": ["223.5.5.5", "223.6.6.6"],
-        nameserver: [
-          "https://223.5.5.5/dns-query#h3=true",
-          "https://223.6.6.6/dns-query#h3=true"
-        ]
-      },
-      proxies: mergedProxies,
-      "rule-providers": {
-        private: {
-          url: "https://ghfast.top/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/private.yaml",
-          path: "./ruleset/private.yaml",
-          behavior: "domain",
-          interval: 86400,
-          format: "yaml",
-          type: "http"
-        },
-        rules: [
-          "DOMAIN-KEYWORD,vidhub1.cc,DIRECT",
-          "DOMAIN,domainname,PROXY",
-          "RULE-SET,Spotify_domain,Spotify",
-          "RULE-SET,youtube_domain,Youtube",
-          "RULE-SET,copilot,AIGC",
-          "RULE-SET,claude,AIGC",
-          "RULE-SET,bard,AIGC",
-          "RULE-SET,openai,AIGC",
-          "DOMAIN-SUFFIX,chat.openai.com,AIGC",
-          "DOMAIN-SUFFIX,chatgpt.com,AIGC",
-          "DOMAIN-SUFFIX,api.openai.com,AIGC"
-        ]
-      }
-    };
-
+    fixedConfig.proxies = mergedProxies;
+    
+    // 5. 输出最终配置，保留固定配置中原有的所有分流规则、代理组、规则提供者等信息
     res.set('Content-Type', 'text/yaml');
-    // 禁用自动换行（lineWidth: -1）以保留较好格式
-    res.send(yaml.dump(finalConfig, { lineWidth: -1 }));
+    res.send(yaml.dump(fixedConfig, { lineWidth: -1 }));
   } catch (error) {
     res.status(500).send(`转换失败：${error.message}`);
   }
