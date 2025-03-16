@@ -59,6 +59,14 @@ app.get('/', async (req, res) => {
       };
     }
 
+    // ========================
+    // 新增代码开始：如果订阅配置中有流量统计字段（trafficInfo），合并到模板中
+    if (subConfig.trafficInfo) {
+      fixedConfig.trafficInfo = subConfig.trafficInfo;
+    }
+    // 新增代码结束
+    // ========================
+
     // 核心逻辑：混合模板与订阅代理
     if (subConfig?.proxies?.length > 0) {
       // 1. 保留模板所有代理
