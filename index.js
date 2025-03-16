@@ -3,7 +3,6 @@ const axios = require('axios');
 const yaml = require('js-yaml');
 const app = express();
 
-// 固定配置文件 URL（包含完整的分流规则、代理组、规则提供者等）
 const FIXED_CONFIG_URL = 'https://raw.githubusercontent.com/6otho/Yaml-PaKo/refs/heads/main/PAKO.yaml';
 
 async function loadYaml(url) {
@@ -16,32 +15,32 @@ app.get('/', async (req, res) => {
   if (!subUrl) return res.status(400).send('请提供订阅链接，例如 ?url=你的订阅地址');
   
   try {
-    // 1. 加载固定模板配置（其中包含完整的分流规则、代理组、规则提供者等）
+    // 加载模板配置
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
+    
+    // 确保proxies字段存在且为数组
     if (!Array.isArray(fixedConfig.proxies)) {
       fixedConfig.proxies = [];
     }
 
-    // 2. 获取订阅数据
+    // 获取订阅数据
     const response = await axios.get(subUrl, { headers: { 'User-Agent': 'Clash Verge' } });
     let decodedData = response.data;
     
-    // Base64 解码处理（如果返回数据经过 Base64 编码，则解码）
+    // Base64解码处理
     try {
       const tempDecoded = Buffer.from(decodedData, 'base64').toString('utf-8');
       if (tempDecoded.includes('proxies:') || tempDecoded.includes('port:')) {
         decodedData = tempDecoded;
       }
-    } catch (e) {
-      // 忽略解码失败
-    }
-    
-    // 3. 解析订阅数据（支持 YAML 格式或自定义格式）
+    } catch (e) {}
+
+    // 解析订阅数据
     let subConfig;
     if (decodedData.includes('proxies:')) {
       subConfig = yaml.load(decodedData);
     } else {
-      // 自定义格式解析：生成的节点名称仅作为默认，不包含流量等描述
+      // 自定义格式解析
       subConfig = {
         proxies: decodedData.split('\n')
           .filter(line => line.trim())
@@ -53,47 +52,64 @@ app.get('/', async (req, res) => {
               server: parts[1],
               port: parseInt(parts[2]),
               cipher: parts[3] || 'aes-256-gcm',
-              password: parts[4],
-              udp: true
+              password: parts[4]
             } : null;
           })
           .filter(Boolean)
       };
     }
-    
-    // 4. 合并逻辑：仅更新固定配置中 proxies 数组的连接参数（server、port、password、cipher、type、udp）
-    //    保留固定配置中原有的代理名称（这些名称包含了流量、重置、到期等信息）
-    const templateProxies = fixedConfig.proxies;
-    const subs = subConfig.proxies || [];
-    let mergedProxies = templateProxies.map((tplProxy, index) => {
-      if (index < subs.length) {
-        const subProxy = subs[index];
-        return {
-          ...tplProxy,
+
+    // 核心逻辑：混合模板与订阅代理
+    if (subConfig?.proxies?.length > 0) {
+      // 1. 保留模板所有代理
+      const templateProxies = [...fixedConfig.proxies];
+
+      // 2. 替换第一个代理的服务器信息（保留名称）
+      if (templateProxies.length > 0) {
+        const subProxy = subConfig.proxies[0];
+        templateProxies[0] = {
+          ...templateProxies[0],  // 保留名称和默认配置
           server: subProxy.server,
-          port: subProxy.port || tplProxy.port,
-          password: subProxy.password || tplProxy.password,
-          cipher: subProxy.cipher || tplProxy.cipher,
-          type: subProxy.type || tplProxy.type,
-          udp: (subProxy.udp !== undefined) ? subProxy.udp : tplProxy.udp
+          port: subProxy.port || templateProxies[0].port,
+          password: subProxy.password || templateProxies[0].password,
+          cipher: subProxy.cipher || templateProxies[0].cipher,
+          type: subProxy.type || templateProxies[0].type
         };
       }
-      return tplProxy;
-    });
-    // 如果订阅代理数量超过模板数量，则追加额外的节点（前提是不重复名称）
-    if (subs.length > templateProxies.length) {
-      const extraSubs = subs.slice(templateProxies.length);
-      extraSubs.forEach(subProxy => {
-        if (!mergedProxies.some(proxy => proxy.name === subProxy.name)) {
-          mergedProxies.push(subProxy);
+
+      // 3. 合并代理列表（模板代理 + 订阅代理）
+      const mergedProxies = [...templateProxies, ...subConfig.proxies];
+
+      // 4. 根据名称去重（保留第一个出现的代理）
+      const seen = new Map();
+      fixedConfig.proxies = mergedProxies.filter(proxy => {
+        if (!proxy?.name) return false;
+        if (!seen.has(proxy.name)) {
+          seen.set(proxy.name, true);
+          return true;
         }
+        return false;
       });
+
+      // 5. 更新PROXY组
+      if (Array.isArray(fixedConfig['proxy-groups'])) {
+        fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
+          if (group.name === 'PROXY' && Array.isArray(group.proxies)) {
+            // 保留原有名称顺序，实际连接已更新
+            return {
+              ...group,
+              proxies: group.proxies.filter(name => 
+                fixedConfig.proxies.some(p => p.name === name)
+              )
+            };
+          }
+          return group;
+        });
+      }
     }
-    fixedConfig.proxies = mergedProxies;
-    
-    // 5. 输出最终配置，保留固定配置中原有的所有分流规则、代理组、规则提供者等信息
+
     res.set('Content-Type', 'text/yaml');
-    res.send(yaml.dump(fixedConfig, { lineWidth: -1 }));
+    res.send(yaml.dump(fixedConfig));
   } catch (error) {
     res.status(500).send(`转换失败：${error.message}`);
   }
