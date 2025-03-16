@@ -18,7 +18,7 @@ app.get('/', async (req, res) => {
     // 加载模板配置
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
     
-    // 确保proxies字段存在且为数组
+    // 确保 proxies 字段存在且为数组
     if (!Array.isArray(fixedConfig.proxies)) {
       fixedConfig.proxies = [];
     }
@@ -27,7 +27,7 @@ app.get('/', async (req, res) => {
     const response = await axios.get(subUrl, { headers: { 'User-Agent': 'Clash Verge' } });
     let decodedData = response.data;
     
-    // Base64解码处理
+    // Base64 解码处理
     try {
       const tempDecoded = Buffer.from(decodedData, 'base64').toString('utf-8');
       if (tempDecoded.includes('proxies:') || tempDecoded.includes('port:')) {
@@ -59,13 +59,34 @@ app.get('/', async (req, res) => {
       };
     }
 
-    // ========================
-    // 新增代码开始：如果订阅配置中有流量统计字段（trafficInfo），合并到模板中
-    if (subConfig.trafficInfo) {
-      fixedConfig.trafficInfo = subConfig.trafficInfo;
+    // ========= 新增代码开始 =========
+    // 提取订阅中包含流量信息的代理节点
+    // 假设流量信息节点的名称以“剩余流量：”、“距离下次重置剩余：”或“套餐到期：”开头
+    let trafficInfo = {};
+    if (subConfig && Array.isArray(subConfig.proxies)) {
+      const normalProxies = [];
+      const trafficRegex = /^(剩余流量：|距离下次重置剩余：|套餐到期：)/;
+      for (const proxy of subConfig.proxies) {
+        if (proxy.name && trafficRegex.test(proxy.name)) {
+          if (proxy.name.startsWith("剩余流量：")) {
+            trafficInfo.remaining = proxy.name.replace("剩余流量：", "").trim();
+          } else if (proxy.name.startsWith("距离下次重置剩余：")) {
+            trafficInfo.reset = proxy.name.replace("距离下次重置剩余：", "").trim();
+          } else if (proxy.name.startsWith("套餐到期：")) {
+            trafficInfo.expire = proxy.name.replace("套餐到期：", "").trim();
+          }
+        } else {
+          normalProxies.push(proxy);
+        }
+      }
+      // 如果提取到流量信息，则保存到 fixedConfig.trafficInfo 中
+      if (Object.keys(trafficInfo).length > 0) {
+        fixedConfig.trafficInfo = trafficInfo;
+      }
+      // 更新订阅配置中的代理列表为正常节点
+      subConfig.proxies = normalProxies;
     }
-    // 新增代码结束
-    // ========================
+    // ========= 新增代码结束 =========
 
     // 核心逻辑：混合模板与订阅代理
     if (subConfig?.proxies?.length > 0) {
@@ -99,11 +120,10 @@ app.get('/', async (req, res) => {
         return false;
       });
 
-      // 5. 更新PROXY组
+      // 5. 更新 PROXY 组
       if (Array.isArray(fixedConfig['proxy-groups'])) {
         fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
           if (group.name === 'PROXY' && Array.isArray(group.proxies)) {
-            // 保留原有名称顺序，实际连接已更新
             return {
               ...group,
               proxies: group.proxies.filter(name => 
