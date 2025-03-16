@@ -85,6 +85,13 @@ app.get('/', async (req, res) => {
       }
       // 更新订阅配置中的代理列表为正常节点
       subConfig.proxies = normalProxies;
+      
+      // ===== 新增代码：将流量信息附加到模板第一个代理节点的名称上 =====
+      if (Object.keys(trafficInfo).length > 0 && fixedConfig.proxies.length > 0) {
+        const infoStr = ` (剩余流量：${trafficInfo.remaining}，重置剩余：${trafficInfo.reset}，套餐到期：${trafficInfo.expire})`;
+        fixedConfig.proxies[0].name = fixedConfig.proxies[0].name + infoStr;
+      }
+      // ===== 新增代码结束 =====
     }
     // ========= 新增代码结束 =========
 
