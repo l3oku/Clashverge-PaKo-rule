@@ -15,11 +15,10 @@ app.get('/', async (req, res) => {
   if (!subUrl) return res.status(400).send('请提供订阅链接，例如 ?url=你的订阅地址');
   
   try {
-    // 加载模板配置
+    // 加载模板配置（固定配置中预设了包含流量信息的代理名称）
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
-    if (!fixedConfig || typeof fixedConfig !== 'object') {
-      throw new Error('模板配置解析失败');
-    }
+    
+    // 确保proxies字段存在且为数组
     if (!Array.isArray(fixedConfig.proxies)) {
       fixedConfig.proxies = [];
     }
@@ -27,20 +26,21 @@ app.get('/', async (req, res) => {
     // 获取订阅数据
     const response = await axios.get(subUrl, { headers: { 'User-Agent': 'Clash Verge' } });
     let decodedData = response.data;
+    
+    // Base64解码处理
     try {
       const tempDecoded = Buffer.from(decodedData, 'base64').toString('utf-8');
       if (tempDecoded.includes('proxies:') || tempDecoded.includes('port:')) {
         decodedData = tempDecoded;
       }
-    } catch (e) {
-      // 如果解码失败，则继续使用原数据
-    }
+    } catch (e) {}
 
     // 解析订阅数据
     let subConfig;
     if (decodedData.includes('proxies:')) {
       subConfig = yaml.load(decodedData);
     } else {
+      // 自定义格式解析（注意：此处生成的代理名称仅为默认格式，不包含流量信息）
       subConfig = {
         proxies: decodedData.split('\n')
           .filter(line => line.trim())
@@ -52,84 +52,59 @@ app.get('/', async (req, res) => {
               server: parts[1],
               port: parseInt(parts[2]),
               cipher: parts[3] || 'aes-256-gcm',
-              password: parts[4]
+              password: parts[4],
+              udp: true
             } : null;
           })
           .filter(Boolean)
       };
     }
 
-    // ======= 提取流量信息节点 =======
-    let trafficProxies = [];
-    let normalProxies = [];
-    const trafficRegex = /^(剩余流量：|距离下次重置剩余：|套餐到期：)/;
-    if (subConfig && Array.isArray(subConfig.proxies)) {
-      for (const proxy of subConfig.proxies) {
-        if (proxy.name && trafficRegex.test(proxy.name)) {
-          trafficProxies.push(proxy);
-        } else {
-          normalProxies.push(proxy);
+    // 核心逻辑：使用订阅代理更新模板代理的连接信息（保留模板代理名称，即流量信息），避免重复
+    if (subConfig?.proxies?.length > 0) {
+      const templateProxies = fixedConfig.proxies || [];
+      const subs = subConfig.proxies;
+      
+      // 更新模板中每个代理的连接参数，保留模板中的名称
+      const updatedProxies = templateProxies.map((tplProxy, index) => {
+        if (index < subs.length) {
+          const subProxy = subs[index];
+          return {
+            ...tplProxy,
+            server: subProxy.server,
+            port: subProxy.port || tplProxy.port,
+            password: subProxy.password || tplProxy.password,
+            cipher: subProxy.cipher || tplProxy.cipher,
+            type: subProxy.type || tplProxy.type,
+            udp: subProxy.udp !== undefined ? subProxy.udp : tplProxy.udp
+          };
         }
-      }
-      subConfig.proxies = normalProxies;
-    }
-    // ======= 提取结束 =======
+        return tplProxy;
+      });
+      
+      // 如果订阅代理数量多于模板代理数量，可选择是否添加额外节点，
+      // 为确保流量信息统一，这里只保留模板内预设的节点，避免新增没有流量信息的节点。
+      fixedConfig.proxies = updatedProxies;
 
-    // ======= 合并逻辑 =======
-    // 从模板中取出已有代理节点
-    const templateProxies = [...fixedConfig.proxies];
-
-    // 如果模板和订阅中均有普通节点，则用订阅的第一个普通节点更新模板第一个节点
-    if (templateProxies.length > 0 && normalProxies.length > 0) {
-      const subProxy = normalProxies[0];
-      templateProxies[0] = {
-        ...templateProxies[0],
-        server: subProxy.server,
-        port: subProxy.port || templateProxies[0].port,
-        password: subProxy.password || templateProxies[0].password,
-        cipher: subProxy.cipher || templateProxies[0].cipher,
-        type: subProxy.type || templateProxies[0].type
-      };
-    }
-
-    // 合并后的代理列表：先放流量信息节点，再放模板节点，再放普通订阅节点
-    let mergedProxies = [...trafficProxies, ...templateProxies, ...normalProxies];
-
-    // 根据名称去重
-    const seen = new Map();
-    fixedConfig.proxies = mergedProxies.filter(proxy => {
-      if (!proxy?.name) return false;
-      if (!seen.has(proxy.name)) {
-        seen.set(proxy.name, true);
-        return true;
-      }
-      return false;
-    });
-    // ======= 合并逻辑结束 =======
-
-    // ======= 更新 "PROXY" 代理组 =======
-    try {
+      // 更新PROXY组（保持组中代理名称与更新后的代理匹配）
       if (Array.isArray(fixedConfig['proxy-groups'])) {
         fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-          if (group.name === 'PROXY') {
-            // 强制将所有流量信息节点名称放在前面
-            const trafficNames = trafficProxies.map(p => p.name);
-            const allNames = fixedConfig.proxies.map(p => p.name);
-            group.proxies = [...trafficNames, ...allNames.filter(name => !trafficNames.includes(name))];
+          if (group.name === 'PROXY' && Array.isArray(group.proxies)) {
+            return {
+              ...group,
+              proxies: group.proxies.filter(name => 
+                fixedConfig.proxies.some(p => p.name === name)
+              )
+            };
           }
           return group;
         });
       }
-    } catch (err) {
-      // 如果更新代理组出错，不阻止转换
-      console.error("更新 proxy-groups 失败：", err);
     }
-    // ======= 更新结束 =======
 
     res.set('Content-Type', 'text/yaml');
     res.send(yaml.dump(fixedConfig));
   } catch (error) {
-    console.error(error);
     res.status(500).send(`转换失败：${error.message}`);
   }
 });
