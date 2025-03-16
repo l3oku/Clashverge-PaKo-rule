@@ -18,7 +18,7 @@ app.get('/', async (req, res) => {
     // 加载模板配置（固定配置中预设了包含流量信息的代理名称）
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
     
-    // 确保proxies字段存在且为数组
+    // 确保 proxies 字段存在且为数组
     if (!Array.isArray(fixedConfig.proxies)) {
       fixedConfig.proxies = [];
     }
@@ -27,7 +27,7 @@ app.get('/', async (req, res) => {
     const response = await axios.get(subUrl, { headers: { 'User-Agent': 'Clash Verge' } });
     let decodedData = response.data;
     
-    // Base64解码处理
+    // Base64 解码处理
     try {
       const tempDecoded = Buffer.from(decodedData, 'base64').toString('utf-8');
       if (tempDecoded.includes('proxies:') || tempDecoded.includes('port:')) {
@@ -40,7 +40,7 @@ app.get('/', async (req, res) => {
     if (decodedData.includes('proxies:')) {
       subConfig = yaml.load(decodedData);
     } else {
-      // 自定义格式解析（注意：此处生成的代理名称仅为默认格式，不包含流量信息）
+      // 自定义格式解析：此处生成的节点名称可能不包含流量等信息
       subConfig = {
         proxies: decodedData.split('\n')
           .filter(line => line.trim())
@@ -60,12 +60,12 @@ app.get('/', async (req, res) => {
       };
     }
 
-    // 核心逻辑：使用订阅代理更新模板代理的连接信息（保留模板代理名称，即流量信息），避免重复
+    // 核心逻辑：用订阅代理更新固定模板的连接信息，但保留模板中包含流量等有用信息的名称
     if (subConfig?.proxies?.length > 0) {
       const templateProxies = fixedConfig.proxies || [];
       const subs = subConfig.proxies;
       
-      // 更新模板中每个代理的连接参数，保留模板中的名称
+      // 1. 更新模板中已有节点的连接参数（按顺序匹配），名称不变
       const updatedProxies = templateProxies.map((tplProxy, index) => {
         if (index < subs.length) {
           const subProxy = subs[index];
@@ -76,17 +76,25 @@ app.get('/', async (req, res) => {
             password: subProxy.password || tplProxy.password,
             cipher: subProxy.cipher || tplProxy.cipher,
             type: subProxy.type || tplProxy.type,
-            udp: subProxy.udp !== undefined ? subProxy.udp : tplProxy.udp
+            udp: (subProxy.udp !== undefined) ? subProxy.udp : tplProxy.udp
           };
         }
         return tplProxy;
       });
       
-      // 如果订阅代理数量多于模板代理数量，可选择是否添加额外节点，
-      // 为确保流量信息统一，这里只保留模板内预设的节点，避免新增没有流量信息的节点。
+      // 2. 如果订阅代理数量多于模板数量，则将多余的订阅节点追加进来（前提是不和现有节点名称重复）
+      if (subs.length > templateProxies.length) {
+        const extraSubs = subs.slice(templateProxies.length);
+        extraSubs.forEach(subProxy => {
+          if (!updatedProxies.some(proxy => proxy.name === subProxy.name)) {
+            updatedProxies.push(subProxy);
+          }
+        });
+      }
+      
       fixedConfig.proxies = updatedProxies;
 
-      // 更新PROXY组（保持组中代理名称与更新后的代理匹配）
+      // 3. 更新 PROXY 组，确保组内的代理名称存在于更新后的代理列表中
       if (Array.isArray(fixedConfig['proxy-groups'])) {
         fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
           if (group.name === 'PROXY' && Array.isArray(group.proxies)) {
