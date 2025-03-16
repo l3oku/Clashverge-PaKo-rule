@@ -17,6 +17,9 @@ app.get('/', async (req, res) => {
   try {
     // 加载模板配置
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
+    if (!fixedConfig || typeof fixedConfig !== 'object') {
+      throw new Error('模板配置解析失败');
+    }
     if (!Array.isArray(fixedConfig.proxies)) {
       fixedConfig.proxies = [];
     }
@@ -29,7 +32,9 @@ app.get('/', async (req, res) => {
       if (tempDecoded.includes('proxies:') || tempDecoded.includes('port:')) {
         decodedData = tempDecoded;
       }
-    } catch (e) {}
+    } catch (e) {
+      // 如果解码失败，则继续使用原数据
+    }
 
     // 解析订阅数据
     let subConfig;
@@ -54,7 +59,7 @@ app.get('/', async (req, res) => {
       };
     }
 
-    // ======= 新增：提取流量信息节点 =======
+    // ======= 提取流量信息节点 =======
     let trafficProxies = [];
     let normalProxies = [];
     const trafficRegex = /^(剩余流量：|距离下次重置剩余：|套餐到期：)/;
@@ -68,13 +73,13 @@ app.get('/', async (req, res) => {
       }
       subConfig.proxies = normalProxies;
     }
-    // ======= 新增结束 =======
+    // ======= 提取结束 =======
 
     // ======= 合并逻辑 =======
     // 从模板中取出已有代理节点
     const templateProxies = [...fixedConfig.proxies];
 
-    // 如果模板和订阅中均有普通节点，则用订阅的第一个普通节点更新模板第一个节点（保留模板名称）
+    // 如果模板和订阅中均有普通节点，则用订阅的第一个普通节点更新模板第一个节点
     if (templateProxies.length > 0 && normalProxies.length > 0) {
       const subProxy = normalProxies[0];
       templateProxies[0] = {
@@ -87,10 +92,10 @@ app.get('/', async (req, res) => {
       };
     }
 
-    // 合并后的代理列表：先放流量信息节点，再放模板节点，再放订阅普通节点
+    // 合并后的代理列表：先放流量信息节点，再放模板节点，再放普通订阅节点
     let mergedProxies = [...trafficProxies, ...templateProxies, ...normalProxies];
 
-    // 去重：保留第一次出现的同名节点
+    // 根据名称去重
     const seen = new Map();
     fixedConfig.proxies = mergedProxies.filter(proxy => {
       if (!proxy?.name) return false;
@@ -102,26 +107,29 @@ app.get('/', async (req, res) => {
     });
     // ======= 合并逻辑结束 =======
 
-    // ======= 新增：更新 "PROXY" 代理组 =======
-    // 如果固定配置中存在 "proxy-groups"，则强制在名为 "PROXY" 的组中加入所有流量信息节点名称（排在前面）
-    if (Array.isArray(fixedConfig['proxy-groups'])) {
-      fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-        if (group.name === 'PROXY') {
-          // trafficProxies 可能为空
-          const trafficNames = trafficProxies.map(p => p.name);
-          // 收集当前固定配置中所有节点的名称
-          const allNames = fixedConfig.proxies.map(p => p.name);
-          // 设置 PROXY 组为：先显示流量信息节点，再显示其它所有节点（按 allNames 顺序）
-          group.proxies = [...trafficNames, ...allNames.filter(name => !trafficNames.includes(name))];
-        }
-        return group;
-      });
+    // ======= 更新 "PROXY" 代理组 =======
+    try {
+      if (Array.isArray(fixedConfig['proxy-groups'])) {
+        fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
+          if (group.name === 'PROXY') {
+            // 强制将所有流量信息节点名称放在前面
+            const trafficNames = trafficProxies.map(p => p.name);
+            const allNames = fixedConfig.proxies.map(p => p.name);
+            group.proxies = [...trafficNames, ...allNames.filter(name => !trafficNames.includes(name))];
+          }
+          return group;
+        });
+      }
+    } catch (err) {
+      // 如果更新代理组出错，不阻止转换
+      console.error("更新 proxy-groups 失败：", err);
     }
-    // ======= 新增结束 =======
+    // ======= 更新结束 =======
 
     res.set('Content-Type', 'text/yaml');
     res.send(yaml.dump(fixedConfig));
   } catch (error) {
+    console.error(error);
     res.status(500).send(`转换失败：${error.message}`);
   }
 });
