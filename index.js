@@ -17,8 +17,6 @@ app.get('/', async (req, res) => {
   try {
     // 加载模板配置
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
-    
-    // 确保 proxies 字段存在且为数组
     if (!Array.isArray(fixedConfig.proxies)) {
       fixedConfig.proxies = [];
     }
@@ -26,8 +24,6 @@ app.get('/', async (req, res) => {
     // 获取订阅数据
     const response = await axios.get(subUrl, { headers: { 'User-Agent': 'Clash Verge' } });
     let decodedData = response.data;
-    
-    // Base64 解码处理
     try {
       const tempDecoded = Buffer.from(decodedData, 'base64').toString('utf-8');
       if (tempDecoded.includes('proxies:') || tempDecoded.includes('port:')) {
@@ -40,7 +36,6 @@ app.get('/', async (req, res) => {
     if (decodedData.includes('proxies:')) {
       subConfig = yaml.load(decodedData);
     } else {
-      // 自定义格式解析
       subConfig = {
         proxies: decodedData.split('\n')
           .filter(line => line.trim())
@@ -59,34 +54,31 @@ app.get('/', async (req, res) => {
       };
     }
 
-    // ========= 新增代码开始 =========
-    // 分离出流量信息节点和普通节点
+    // ======= 新增：提取流量信息节点 =======
     let trafficProxies = [];
     let normalProxies = [];
     const trafficRegex = /^(剩余流量：|距离下次重置剩余：|套餐到期：)/;
     if (subConfig && Array.isArray(subConfig.proxies)) {
       for (const proxy of subConfig.proxies) {
         if (proxy.name && trafficRegex.test(proxy.name)) {
-          // 保留原始流量信息节点
           trafficProxies.push(proxy);
         } else {
           normalProxies.push(proxy);
         }
       }
-      // 用普通节点更新订阅配置
       subConfig.proxies = normalProxies;
     }
-    // ========= 新增代码结束 =========
+    // ======= 新增结束 =======
 
-    // ========= 合并逻辑 =========
-    // 从模板中获取已有代理节点
+    // ======= 合并逻辑 =======
+    // 从模板中取出已有代理节点
     const templateProxies = [...fixedConfig.proxies];
 
-    // 如果模板有节点且订阅普通节点存在，则用订阅中的第一个普通节点更新模板第一个节点
+    // 如果模板和订阅中均有普通节点，则用订阅的第一个普通节点更新模板第一个节点（保留模板名称）
     if (templateProxies.length > 0 && normalProxies.length > 0) {
       const subProxy = normalProxies[0];
       templateProxies[0] = {
-        ...templateProxies[0],  // 保留模板的名称和默认配置
+        ...templateProxies[0],
         server: subProxy.server,
         port: subProxy.port || templateProxies[0].port,
         password: subProxy.password || templateProxies[0].password,
@@ -98,7 +90,7 @@ app.get('/', async (req, res) => {
     // 合并后的代理列表：先放流量信息节点，再放模板节点，再放订阅普通节点
     let mergedProxies = [...trafficProxies, ...templateProxies, ...normalProxies];
 
-    // 根据名称去重（保留第一次出现的节点）
+    // 去重：保留第一次出现的同名节点
     const seen = new Map();
     fixedConfig.proxies = mergedProxies.filter(proxy => {
       if (!proxy?.name) return false;
@@ -108,22 +100,24 @@ app.get('/', async (req, res) => {
       }
       return false;
     });
+    // ======= 合并逻辑结束 =======
 
-    // 更新 PROXY 组（不做修改，直接过滤掉不存在的节点名称）
+    // ======= 新增：更新 "PROXY" 代理组 =======
+    // 如果固定配置中存在 "proxy-groups"，则强制在名为 "PROXY" 的组中加入所有流量信息节点名称（排在前面）
     if (Array.isArray(fixedConfig['proxy-groups'])) {
       fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-        if (group.name === 'PROXY' && Array.isArray(group.proxies)) {
-          return {
-            ...group,
-            proxies: group.proxies.filter(name => 
-              fixedConfig.proxies.some(p => p.name === name)
-            )
-          };
+        if (group.name === 'PROXY') {
+          // trafficProxies 可能为空
+          const trafficNames = trafficProxies.map(p => p.name);
+          // 收集当前固定配置中所有节点的名称
+          const allNames = fixedConfig.proxies.map(p => p.name);
+          // 设置 PROXY 组为：先显示流量信息节点，再显示其它所有节点（按 allNames 顺序）
+          group.proxies = [...trafficNames, ...allNames.filter(name => !trafficNames.includes(name))];
         }
         return group;
       });
     }
-    // ========= 合并逻辑结束 =========
+    // ======= 新增结束 =======
 
     res.set('Content-Type', 'text/yaml');
     res.send(yaml.dump(fixedConfig));
