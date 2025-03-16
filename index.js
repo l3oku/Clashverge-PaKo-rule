@@ -13,12 +13,10 @@ async function loadYaml(url) {
 app.get('/', async (req, res) => {
   const subUrl = req.query.url;
   if (!subUrl) return res.status(400).send('请提供订阅链接，例如 ?url=你的订阅地址');
-  
+
   try {
-    // 加载模板配置（固定配置中预设了包含流量信息的代理名称）
+    // 加载固定模板配置（其中 proxies 中包含了流量等信息）
     const fixedConfig = await loadYaml(FIXED_CONFIG_URL);
-    
-    // 确保 proxies 字段存在且为数组
     if (!Array.isArray(fixedConfig.proxies)) {
       fixedConfig.proxies = [];
     }
@@ -26,7 +24,7 @@ app.get('/', async (req, res) => {
     // 获取订阅数据
     const response = await axios.get(subUrl, { headers: { 'User-Agent': 'Clash Verge' } });
     let decodedData = response.data;
-    
+
     // Base64 解码处理
     try {
       const tempDecoded = Buffer.from(decodedData, 'base64').toString('utf-8');
@@ -40,7 +38,7 @@ app.get('/', async (req, res) => {
     if (decodedData.includes('proxies:')) {
       subConfig = yaml.load(decodedData);
     } else {
-      // 自定义格式解析：此处生成的节点名称可能不包含流量等信息
+      // 自定义格式解析（这里生成的名称为默认格式，不含流量信息，仅用于更新连接参数）
       subConfig = {
         proxies: decodedData.split('\n')
           .filter(line => line.trim())
@@ -60,58 +58,78 @@ app.get('/', async (req, res) => {
       };
     }
 
-    // 核心逻辑：用订阅代理更新固定模板的连接信息，但保留模板中包含流量等有用信息的名称
-    if (subConfig?.proxies?.length > 0) {
-      const templateProxies = fixedConfig.proxies || [];
-      const subs = subConfig.proxies;
-      
-      // 1. 更新模板中已有节点的连接参数（按顺序匹配），名称不变
-      const updatedProxies = templateProxies.map((tplProxy, index) => {
-        if (index < subs.length) {
-          const subProxy = subs[index];
-          return {
-            ...tplProxy,
-            server: subProxy.server,
-            port: subProxy.port || tplProxy.port,
-            password: subProxy.password || tplProxy.password,
-            cipher: subProxy.cipher || tplProxy.cipher,
-            type: subProxy.type || tplProxy.type,
-            udp: (subProxy.udp !== undefined) ? subProxy.udp : tplProxy.udp
-          };
+    // 合并逻辑：用订阅代理中的连接参数更新固定模板的 proxies（保留模板中预设的名称）
+    const templateProxies = fixedConfig.proxies;
+    const subs = subConfig.proxies || [];
+    let mergedProxies = templateProxies.map((tplProxy, index) => {
+      if (index < subs.length) {
+        const subProxy = subs[index];
+        return {
+          ...tplProxy,
+          server: subProxy.server,
+          port: subProxy.port || tplProxy.port,
+          password: subProxy.password || tplProxy.password,
+          cipher: subProxy.cipher || tplProxy.cipher,
+          type: subProxy.type || tplProxy.type,
+          udp: (subProxy.udp !== undefined) ? subProxy.udp : tplProxy.udp
+        };
+      }
+      return tplProxy;
+    });
+    // 如果订阅节点比模板多，则追加额外的不重复节点
+    if (subs.length > templateProxies.length) {
+      const extraSubs = subs.slice(templateProxies.length);
+      extraSubs.forEach(subProxy => {
+        if (!mergedProxies.some(proxy => proxy.name === subProxy.name)) {
+          mergedProxies.push(subProxy);
         }
-        return tplProxy;
       });
-      
-      // 2. 如果订阅代理数量多于模板数量，则将多余的订阅节点追加进来（前提是不和现有节点名称重复）
-      if (subs.length > templateProxies.length) {
-        const extraSubs = subs.slice(templateProxies.length);
-        extraSubs.forEach(subProxy => {
-          if (!updatedProxies.some(proxy => proxy.name === subProxy.name)) {
-            updatedProxies.push(subProxy);
-          }
-        });
-      }
-      
-      fixedConfig.proxies = updatedProxies;
-
-      // 3. 更新 PROXY 组，确保组内的代理名称存在于更新后的代理列表中
-      if (Array.isArray(fixedConfig['proxy-groups'])) {
-        fixedConfig['proxy-groups'] = fixedConfig['proxy-groups'].map(group => {
-          if (group.name === 'PROXY' && Array.isArray(group.proxies)) {
-            return {
-              ...group,
-              proxies: group.proxies.filter(name => 
-                fixedConfig.proxies.some(p => p.name === name)
-              )
-            };
-          }
-          return group;
-        });
-      }
     }
 
+    // 构造最终输出对象，严格按照你提供的格式：
+    const finalConfig = {
+      dns: {
+        enable: true,
+        listen: "0.0.0.0:1053",
+        ipv6: true,
+        "enhanced-mode": "fake-ip",
+        "fake-ip-range": "28.0.0.1/8",
+        "fake-ip-filter": ["*", "+.lan"],
+        "default-nameserver": ["223.5.5.5", "223.6.6.6"],
+        nameserver: [
+          "https://223.5.5.5/dns-query#h3=true",
+          "https://223.6.6.6/dns-query#h3=true"
+        ]
+      },
+      proxies: mergedProxies,
+      "rule-providers": {
+        private: {
+          url: "https://ghfast.top/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/private.yaml",
+          path: "./ruleset/private.yaml",
+          behavior: "domain",
+          interval: 86400,
+          format: "yaml",
+          type: "http"
+        },
+        rules: [
+          "DOMAIN-KEYWORD,vidhub1.cc,DIRECT",
+          "DOMAIN,domainname,PROXY",
+          "RULE-SET,Spotify_domain,Spotify",
+          "RULE-SET,youtube_domain,Youtube",
+          "RULE-SET,copilot,AIGC",
+          "RULE-SET,claude,AIGC",
+          "RULE-SET,bard,AIGC",
+          "RULE-SET,openai,AIGC",
+          "DOMAIN-SUFFIX,chat.openai.com,AIGC",
+          "DOMAIN-SUFFIX,chatgpt.com,AIGC",
+          "DOMAIN-SUFFIX,api.openai.com,AIGC"
+        ]
+      }
+    };
+
     res.set('Content-Type', 'text/yaml');
-    res.send(yaml.dump(fixedConfig));
+    // 禁用自动换行（lineWidth: -1）以保留较好格式
+    res.send(yaml.dump(finalConfig, { lineWidth: -1 }));
   } catch (error) {
     res.status(500).send(`转换失败：${error.message}`);
   }
