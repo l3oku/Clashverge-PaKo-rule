@@ -3,7 +3,7 @@ const axios = require('axios');
 const yaml = require('js-yaml');
 const app = express();
 
-const FIXED_CONFIG_URL = 'https://raw.githubusercontent.com/6otho/Yaml-PaKo/refs/heads/main/PAKO.yaml';
+const FIXED_CONFIG_URL = 'https://gh.ikuu.eu.org/https://raw.githubusercontent.com/6otho/Yaml-PaKo/refs/heads/main/PAKO.yaml';
 
 async function loadYaml(url) {
   const response = await axios.get(url, { headers: { 'User-Agent': 'Clash Verge' } });
